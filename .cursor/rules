@@ -1,0 +1,51 @@
+# ── 프로젝트 개요 ──────────────────────────────────────────────
+# 테이블 정의서(엑셀) → 벡터 DB 인덱싱 → 자연어 질의 → Oracle/SAS 쿼리 생성
+# 엑셀 구조: 테이블마다 파일 1개, 시트 1개
+# 1행 헤더: A=컬럼명(영문) B=한국어컬럼명 C=데이터타입 D=PK여부 E=FK참조 F=NULL허용 G=설명
+# 파일명 = 테이블명 (예: SALE_FACT.xlsx)
+# 메타행: A열이 ##META## 이면 B=한국어테이블명 C=도메인 D=테이블설명
+
+# ── 핵심 데이터 모델 ────────────────────────────────────────────
+# @dataclass ColumnSchema: name, korean_name, data_type, is_pk, is_fk, fk_reference, nullable, description
+# @dataclass TableSchema: table_name, korean_name, domain, description, source_file, columns: list[ColumnSchema]
+#   + to_chunk_text() -> str  (임베딩용 직렬화)
+# @dataclass SearchResult: table_name, score, chunk_text, metadata
+# @dataclass GenerationResult: sql, explanation, used_tables, confidence, clarification_needed, dialect, input_tokens, output_tokens
+
+# ── 기술 스택 ────────────────────────────────────────────────────
+# LLM: OpenAI GPT-4o  |  임베딩: text-embedding-3-small  |  벡터DB: ChromaDB
+# 백엔드: FastAPI + uvicorn  |  환경변수: python-dotenv  |  프론트: React + Vite
+
+# ── 코드 규칙 ────────────────────────────────────────────────────
+# Python 3.11+, 타입 힌트 필수
+# 모든 public 함수/클래스에 한국어 docstring
+# 환경변수는 python-dotenv 사용, 하드코딩 절대 금지
+# 에러는 logging 모듈 사용, 사용자 메시지는 한국어
+# Oracle/SAS 공통 함수는 dialect: Literal["oracle","sas"] 파라미터로 분기
+# DML(INSERT/UPDATE/DELETE/DROP/TRUNCATE/MERGE/CREATE/ALTER) 생성 절대 금지
+
+# ── 디렉토리 구조 ────────────────────────────────────────────────
+# project/
+# ├── .cursor/rules
+# ├── .env
+# ├── .env.example
+# ├── .gitignore
+# ├── requirements.txt
+# ├── README.md
+# ├── data/excel/sample/     ← 샘플 엑셀 (query-maker 루트 기준)
+# ├── chroma_db/             ← 자동 생성
+# ├── backend/
+# │   ├── config.py
+# │   ├── models.py
+# │   ├── parser/excel_parser.py
+# │   ├── vectorstore/chroma_store.py
+# │   ├── generator/prompts.py
+# │   ├── generator/sql_generator.py
+# │   ├── api/routes.py
+# │   └── main.py
+# ├── frontend/              ← React + Vite
+# └── scripts/
+#     ├── setup.py
+#     ├── run.py
+#     ├── index.py
+#     └── create_sample_data.py
