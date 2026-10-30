@@ -67,6 +67,16 @@ class SearchResult:
 
 
 @dataclass
+class ClarificationItem:
+    """애매한 질의 시 사용자에게 보여줄 추가 질문 한 건."""
+
+    id: str
+    question: str
+    kind: Literal["single", "text"] = "single"
+    options: list[str] = field(default_factory=list)
+
+
+@dataclass
 class GenerationResult:
     """LLM이 생성한 SQL과 부가 정보를 나타냅니다."""
 
@@ -78,3 +88,4 @@ class GenerationResult:
     dialect: Literal["oracle", "sas"]
     input_tokens: int
     output_tokens: int
+    clarifications: list[ClarificationItem] = field(default_factory=list)

@@ -31,7 +31,11 @@ def _collect_xlsx_paths_from_dir(dir_path: Path) -> list[Path]:
     if not dir_path.is_dir():
         print(f"[오류] 디렉터리가 없습니다: {dir_path}", file=sys.stderr)
         sys.exit(1)
-    paths = sorted(p for p in dir_path.glob("*.xlsx") if p.is_file())
+    paths = sorted(
+        p
+        for p in dir_path.glob("*.xlsx")
+        if p.is_file() and not p.name.startswith("~$")
+    )
     if not paths:
         print(f"[오류] .xlsx 파일이 없습니다: {dir_path}", file=sys.stderr)
         sys.exit(1)

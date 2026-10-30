@@ -3,7 +3,9 @@ export const BASE = 'http://localhost:8000'
 async function _throwIfNotOk(res) {
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
+    const err = new Error(text || `HTTP ${res.status}`)
+    err.status = res.status
+    throw err
   }
 }
 
@@ -74,6 +76,7 @@ export async function querySQL(query, dialect, domain, top_k, opts = {}) {
     top_k: top_k ?? null,
     schema_pool,
     oracle_profile,
+    history: opts.history ?? [],
   }
   const headers = { 'Content-Type': 'application/json' }
   if (opts.token) {
@@ -126,11 +129,42 @@ export async function getStats(schemaPool = 'customer', token = null) {
 }
 
 /**
+ * @param {string} tableName
+ * @param {'customer'|'admin'} schemaPool
+ * @param {string} token
+ */
+export async function deleteTable(tableName, schemaPool, token) {
+  const params = new URLSearchParams({ schema_pool: schemaPool })
+  const res = await fetch(
+    `${BASE}/api/tables/${encodeURIComponent(tableName)}?${params}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  )
+  await _throwIfNotOk(res)
+  return res.json()
+}
+
+/**
  * @param {string} token
  */
 export async function adminStatsSummary(token) {
   const res = await fetch(`${BASE}/api/admin/stats/summary`, {
     headers: { Authorization: `Bearer ${token}` },
+  })
+  await _throwIfNotOk(res)
+  return res.json()
+}
+
+/**
+ * 새도약기금 시연 SQL (querySample 파일, 수정 즉시 반영)
+ * @param {'sas_step1'|'sas_step2'|'oracle'} source
+ */
+export async function getSaedoyakDemoSql(source) {
+  const params = new URLSearchParams({ source })
+  const res = await fetch(`${BASE}/api/demo/saedoyak-sql?${params}`, {
+    cache: 'no-store',
   })
   await _throwIfNotOk(res)
   return res.json()

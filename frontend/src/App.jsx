@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BASE,
   adminStatsSummary,
+  deleteTable,
   getStats,
   getTables,
   loginAdmin,
@@ -11,6 +12,8 @@ import {
 } from './api.js'
 import './App.css'
 import { addFavorite, loadFavorites, removeFavorite } from './favoritesStorage.js'
+import MockupPage from './MockupPage.jsx'
+import { resolveSaedoyakDemoResponse, hydrateSaedoyakDemo } from './saedoyakFundDemo.js'
 
 const KEYWORDS = new Set(
   [
@@ -292,6 +295,233 @@ function isFavoriteLinked(favoritesList, favoriteId) {
   )
 }
 
+function buildBotHistoryContent(data) {
+  if (!data) return ''
+  if (data.sql) {
+    return `SQL:\n${data.sql}\n\n설명: ${data.explanation}\n\n사용 테이블: ${(data.used_tables || []).join(', ')}`
+  }
+  const clars = data.clarifications || []
+  if (clars.length > 0 || data.clarification_needed) {
+    const lines = ['[추가 질문]']
+    if (data.clarification_needed) {
+      lines.push(data.clarification_needed)
+    }
+    for (const c of clars) {
+      const opts =
+        c.kind === 'single' && (c.options || []).length
+          ? ` 선택지: ${c.options.join('; ')}`
+          : ''
+      lines.push(`- (${c.id}) ${c.question}${opts}`)
+    }
+    lines.push('[아직 SQL 없음 — 사용자 답변 대기]')
+    if (data.explanation) {
+      lines.push(`설명: ${data.explanation}`)
+    }
+    return lines.join('\n')
+  }
+  return `설명: ${data.explanation || ''}`
+}
+
+function hasClarificationTurn(data) {
+  return Boolean(
+    data &&
+    !data.sql &&
+    ((data.clarifications || []).length > 0 || data.clarification_needed),
+  )
+}
+
+function formatClarDraftAnswers(clarifications, draft) {
+  const lines = ['[clarification 답변]']
+  for (const c of clarifications || []) {
+    const v = (draft[c.id] || '').trim()
+    if (v) lines.push(`${c.id}: ${v}`)
+  }
+  return lines.length > 1 ? lines.join('\n') : ''
+}
+
+/** 확인 질문 답변을 전송용 텍스트로 만듭니다(주관식·선택지 공통). */
+function buildClarificationSubmitText(clarifications, draft, rawText) {
+  const fromDraft = formatClarDraftAnswers(clarifications, draft)
+  if (fromDraft) return fromDraft
+  const t = String(rawText ?? '').trim()
+  if (!t) return ''
+  if (t.startsWith('[clarification 답변]')) return t
+  if ((clarifications || []).length === 1) {
+    return `[clarification 답변]\n${clarifications[0].id}: ${t}`
+  }
+  return t
+}
+
+function clarificationSubmitReady(clarifications, draft, rawText) {
+  const t = String(rawText ?? '').trim()
+  if (t.startsWith('[clarification 답변]')) return true
+  if (t && !formatClarDraftAnswers(clarifications, draft)) return true
+  return (clarifications || []).some((c) => (draft[c.id] || '').trim())
+}
+
+function findPendingClarificationMessage(messages) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === 'assistant' && m.data && hasClarificationTurn(m.data)) {
+      return m
+    }
+    if (m.role === 'assistant' && m.data?.sql) {
+      break
+    }
+  }
+  return null
+}
+
+const CHAT_PLACEHOLDER_INITIAL =
+  '자연어로 질의하세요… (Enter로 전송, Shift+Enter로 줄바꿈)'
+const CHAT_PLACEHOLDER_FOLLOWUP =
+  '추가 요청으로 SQL을 수정하세요… 예: «연체일자 컬럼도 포함» «2026년 8월까지로 변경» (Enter 전송)'
+const CHAT_PLACEHOLDER_CLARIFY =
+  '각 질문 아래 주관식 입력·선택지를 사용하거나, 아래 입력창에 추가 설명 후 Enter'
+
+function AssistantBubble({
+  msg,
+  dialectLabel,
+  oracleProfile,
+  favoritesList,
+  onFavoriteClick,
+  isClarificationActive,
+  clarDraft,
+  onClarOptionSelect,
+  onClarTextChange,
+}) {
+  if (msg.error) {
+    return <div className="sql-null-box">{msg.error}</div>
+  }
+  if (!msg.data) {
+    return (
+      <div className="sql-null-box">서버 응답을 표시할 수 없습니다.</div>
+    )
+  }
+
+  const clarMode = hasClarificationTurn(msg.data)
+  const clars = msg.data.clarifications || []
+
+  return (
+    <>
+      <div className="card-head">
+        <span className={`conf-badge ${confidenceClass(msg.data.confidence)}`}>
+          {msg.data.confidence}
+        </span>
+        <span className="dialect-badge">{dialectLabel}</span>
+        {oracleProfile && (
+          <span className="dialect-badge subtle">
+            {oracleProfile === 'admin_dml' ? 'DML' : '조회'}
+          </span>
+        )}
+        <div className="card-head-actions">
+          <button
+            type="button"
+            className="btn-copy"
+            onClick={() => {
+              if (msg.data.sql) navigator.clipboard.writeText(msg.data.sql)
+            }}
+            disabled={!msg.data.sql}
+          >
+            복사
+          </button>
+          <button
+            type="button"
+            className={`btn-favorite ${
+              isFavoriteLinked(favoritesList, msg.favoriteId)
+                ? 'btn-favorite-on'
+                : ''
+            }`}
+            onClick={() => onFavoriteClick(msg)}
+            disabled={
+              !isFavoriteLinked(favoritesList, msg.favoriteId) &&
+              !msg.data?.sql
+            }
+            title={
+              isFavoriteLinked(favoritesList, msg.favoriteId)
+                ? '즐겨찾기 해제'
+                : '즐겨찾기에 추가'
+            }
+          >
+            {isFavoriteLinked(favoritesList, msg.favoriteId) ? '★' : '☆'}
+          </button>
+        </div>
+      </div>
+
+      {msg.data.sql ? (
+        <SqlBlock
+          sql={msg.data.sql}
+          onCopy={() => navigator.clipboard.writeText(msg.data.sql)}
+        />
+      ) : clarMode ? null : (
+        <div className="sql-null-box">쿼리를 생성할 수 없습니다</div>
+      )}
+
+      {clarMode && (
+        <div className="clar-panel">
+          {msg.data.clarification_needed && (
+            <p className="clar-summary">{msg.data.clarification_needed}</p>
+          )}
+          {clars.map((c) => (
+            <div key={c.id} className="clar-question-block">
+              <p className="clar-question-text">{c.question}</p>
+              {c.kind === 'single' &&
+                (c.options || []).map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    className={`clar-option-btn ${
+                      clarDraft?.[c.id] === opt ? 'clar-option-btn-selected' : ''
+                    }`}
+                    disabled={!isClarificationActive}
+                    onClick={() => onClarOptionSelect?.(c.id, opt, clars)}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              {isClarificationActive && (
+                <textarea
+                  className="clar-text-input"
+                  rows={c.kind === 'text' ? 3 : 2}
+                  placeholder={
+                    c.kind === 'text'
+                      ? '주관식 답변을 입력하세요'
+                      : '선택지가 맞지 않으면 직접 입력 (선택)'
+                  }
+                  value={clarDraft?.[c.id] || ''}
+                  disabled={!isClarificationActive}
+                  onChange={(e) =>
+                    onClarTextChange?.(c.id, e.target.value, clars)
+                  }
+                />
+              )}
+            </div>
+          ))}
+          {isClarificationActive && clars.length > 1 && (
+            <p className="clar-hint muted small">
+              문항마다 선택지 또는 주관식으로 답한 뒤 전송하세요.
+            </p>
+          )}
+        </div>
+      )}
+
+      {!clarMode && msg.data.clarification_needed && (
+        <div className="clar-box">{msg.data.clarification_needed}</div>
+      )}
+
+      <p className="explanation">{msg.data.explanation}</p>
+
+      <div className="used-tables">
+        {(msg.data.used_tables || []).map((t) => (
+          <span key={t} className="used-chip">
+            {t}
+          </span>
+        ))}
+      </div>
+    </>
+  )
+}
+
 const ADMIN_TOKEN_KEY = 'schema-query-admin-token'
 
 export default function App() {
@@ -317,16 +547,167 @@ export default function App() {
   const [uploadTargetPool, setUploadTargetPool] = useState('customer')
   const [oracleProfile, setOracleProfile] = useState('admin_dml')
   const [adminQueryText, setAdminQueryText] = useState('')
-  const [adminResults, setAdminResults] = useState([])
   const [isAdminQueryLoading, setIsAdminQueryLoading] = useState(false)
   const [adminSummary, setAdminSummary] = useState(null)
   const [favorites, setFavorites] = useState(() => loadFavorites())
+  const [deletingTables, setDeletingTables] = useState(new Set())
+  const [showHfsrPopup, setShowHfsrPopup] = useState(false)
+  const hfsrDragRef = useRef(null)
+  const hfsrDragOffset = useRef({ x: 0, y: 0 })
+  const [hfsrPos, setHfsrPos] = useState({ x: 40, y: 72 })
+
+  function onHfsrHeaderMouseDown(e) {
+    if (e.button !== 0) return
+    const el = hfsrDragRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    hfsrDragOffset.current = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    }
+    function onMove(ev) {
+      setHfsrPos({
+        x: ev.clientX - hfsrDragOffset.current.x,
+        y: ev.clientY - hfsrDragOffset.current.y,
+      })
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    e.preventDefault()
+  }
+
+  // 채팅 상태
+  const [chatMessages, setChatMessages] = useState([])
+  const [chatApiHistory, setChatApiHistory] = useState([])
+  const customerHistoryRef = useRef([])
+  const chatMessagesRef = useRef([])
+  const chatScrollRef = useRef(null)
+  const messagesEndRef = useRef(null)
+  const [adminChatMessages, setAdminChatMessages] = useState([])
+  const [adminChatApiHistory, setAdminChatApiHistory] = useState([])
+  const adminHistoryRef = useRef([])
+  const adminMessagesEndRef = useRef(null)
+  const [customerClarDraft, setCustomerClarDraft] = useState({})
+  const [adminClarDraft, setAdminClarDraft] = useState({})
 
   const persistAdminToken = useCallback((t) => {
     setAdminToken(t)
     if (t) localStorage.setItem(ADMIN_TOKEN_KEY, t)
     else localStorage.removeItem(ADMIN_TOKEN_KEY)
   }, [])
+
+  const handleAuthExpired = useCallback(() => {
+    persistAdminToken('')
+    setAdminLoginErr('세션이 만료됐습니다. 다시 로그인해 주세요.')
+  }, [persistAdminToken])
+
+  // 새 메시지/로딩 시 스크롤 하단으로
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatMessages, isLoading])
+
+  useEffect(() => {
+    adminMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [adminChatMessages, isAdminQueryLoading])
+
+  useEffect(() => {
+    chatMessagesRef.current = chatMessages
+  }, [chatMessages])
+
+  const clearCustomerChat = useCallback(() => {
+    setChatMessages([])
+    setChatApiHistory([])
+    customerHistoryRef.current = []
+    setQueryText('')
+    setCustomerClarDraft({})
+  }, [])
+
+  const clearAdminChat = useCallback(() => {
+    setAdminChatMessages([])
+    setAdminChatApiHistory([])
+    adminHistoryRef.current = []
+    setAdminQueryText('')
+    setAdminClarDraft({})
+  }, [])
+
+  useEffect(() => {
+    clearAdminChat()
+  }, [oracleProfile, clearAdminChat])
+
+  const pendingCustomerClar = useMemo(
+    () => findPendingClarificationMessage(chatMessages),
+    [chatMessages],
+  )
+  const pendingAdminClar = useMemo(
+    () => findPendingClarificationMessage(adminChatMessages),
+    [adminChatMessages],
+  )
+
+  const customerClarSendReady = useMemo(() => {
+    if (!pendingCustomerClar?.data) return Boolean(queryText.trim())
+    return clarificationSubmitReady(
+      pendingCustomerClar.data.clarifications,
+      customerClarDraft,
+      queryText,
+    )
+  }, [pendingCustomerClar, customerClarDraft, queryText])
+
+  const adminClarSendReady = useMemo(() => {
+    if (!pendingAdminClar?.data) return Boolean(adminQueryText.trim())
+    return clarificationSubmitReady(
+      pendingAdminClar.data.clarifications,
+      adminClarDraft,
+      adminQueryText,
+    )
+  }, [pendingAdminClar, adminClarDraft, adminQueryText])
+
+  const applyClarOption = useCallback((setDraft, setText, id, value, clars) => {
+    setDraft((prev) => {
+      const next = { ...prev, [id]: value }
+      setText(formatClarDraftAnswers(clars, next))
+      return next
+    })
+  }, [])
+
+  const applyClarText = useCallback((setDraft, setText, id, value, clars) => {
+    setDraft((prev) => {
+      const next = { ...prev, [id]: value }
+      setText(formatClarDraftAnswers(clars, next))
+      return next
+    })
+  }, [])
+
+  const handleCustomerClarOption = useCallback(
+    (id, value, clars) => {
+      applyClarOption(setCustomerClarDraft, setQueryText, id, value, clars)
+    },
+    [applyClarOption],
+  )
+
+  const handleCustomerClarText = useCallback(
+    (id, value, clars) => {
+      applyClarText(setCustomerClarDraft, setQueryText, id, value, clars)
+    },
+    [applyClarText],
+  )
+
+  const handleAdminClarOption = useCallback(
+    (id, value, clars) => {
+      applyClarOption(setAdminClarDraft, setAdminQueryText, id, value, clars)
+    },
+    [applyClarOption],
+  )
+
+  const handleAdminClarText = useCallback(
+    (id, value, clars) => {
+      applyClarText(setAdminClarDraft, setAdminQueryText, id, value, clars)
+    },
+    [applyClarText],
+  )
 
   const loadTables = useCallback(async () => {
     try {
@@ -347,10 +728,11 @@ export default function App() {
       const data = await getTables(undefined, 'admin', adminToken)
       setTables(data.tables || [])
     } catch (e) {
-      console.error(e)
+      if (e.status === 401) handleAuthExpired()
+      else console.error(e)
       setTables([])
     }
-  }, [sidebarTab, adminToken, adminPreviewPool])
+  }, [sidebarTab, adminToken, adminPreviewPool, handleAuthExpired])
 
   const loadStats = useCallback(async () => {
     try {
@@ -365,9 +747,10 @@ export default function App() {
         setStats(s)
       }
     } catch (e) {
-      console.error(e)
+      if (e.status === 401) handleAuthExpired()
+      else console.error(e)
     }
-  }, [sidebarTab, adminToken])
+  }, [sidebarTab, adminToken, handleAuthExpired])
 
   useEffect(() => {
     loadTables()
@@ -541,38 +924,53 @@ export default function App() {
         )
         return
       }
-      setQueryText(q)
+
+      const userMsgId = nextId()
+      const botMsgId = nextId()
+
+      setChatMessages((prev) => [
+        ...prev,
+        { id: userMsgId, role: 'user', text: q },
+      ])
+      setQueryText('')
       setIsLoading(true)
+
       try {
-        const data = await querySQL(
+        const historySnapshot = customerHistoryRef.current
+        const demoTemplate = resolveSaedoyakDemoResponse(
           q,
-          'sas',
-          undefined,
-          undefined,
-          { schema_pool: 'customer' },
+          chatMessagesRef.current,
         )
-        setResults((prev) => [
-          {
-            id: nextId(),
-            query: q,
-            data,
-            error: null,
-            source: 'customer',
-            favoriteId,
-          },
+        const data = demoTemplate
+          ? await hydrateSaedoyakDemo(demoTemplate)
+          : await querySQL(
+              q,
+              'sas',
+              undefined,
+              undefined,
+              { schema_pool: 'customer', history: historySnapshot },
+            )
+        setChatMessages((prev) => [
           ...prev,
+          { id: botMsgId, role: 'assistant', data, query: q, error: null, favoriteId },
         ])
+
+        setCustomerClarDraft({})
+
+        const botContent = buildBotHistoryContent(data)
+        setChatApiHistory((prev) => {
+          const next = [
+            ...prev,
+            { role: 'user', content: q },
+            { role: 'assistant', content: botContent },
+          ]
+          customerHistoryRef.current = next
+          return next
+        })
       } catch (e) {
-        setResults((prev) => [
-          {
-            id: nextId(),
-            query: q,
-            data: null,
-            error: e.message || String(e),
-            source: 'customer',
-            favoriteId,
-          },
+        setChatMessages((prev) => [
           ...prev,
+          { id: botMsgId, role: 'assistant', data: null, query: q, error: e.message || String(e), favoriteId },
         ])
       } finally {
         setIsLoading(false)
@@ -582,7 +980,15 @@ export default function App() {
   )
 
   const submitQuery = async () => {
-    await executeCustomerQuery(queryText, {})
+    let q = queryText
+    if (pendingCustomerClar?.data) {
+      q = buildClarificationSubmitText(
+        pendingCustomerClar.data.clarifications,
+        customerClarDraft,
+        queryText,
+      )
+    }
+    await executeCustomerQuery(q, {})
   }
 
   const executeAdminQuery = useCallback(
@@ -607,9 +1013,18 @@ export default function App() {
         )
         return
       }
-      setAdminQueryText(q)
+      setAdminQueryText('')
       setIsAdminQueryLoading(true)
+
+      const userMsgId = nextId()
+      const botMsgId = nextId()
+      setAdminChatMessages((prev) => [
+        ...prev,
+        { id: userMsgId, role: 'user', text: q },
+      ])
+
       try {
+        const historySnapshot = adminHistoryRef.current
         const data = await querySQL(
           q,
           'oracle',
@@ -619,30 +1034,42 @@ export default function App() {
             schema_pool: 'admin',
             oracle_profile: oracleProfile,
             token: adminToken,
+            history: historySnapshot,
           },
         )
-        setAdminResults((prev) => [
+        setAdminChatMessages((prev) => [
+          ...prev,
           {
-            id: nextId(),
-            query: q,
+            id: botMsgId,
+            role: 'assistant',
             data,
-            error: null,
-            source: 'admin',
-            favoriteId,
-          },
-          ...prev,
-        ])
-      } catch (e) {
-        setAdminResults((prev) => [
-          {
-            id: nextId(),
             query: q,
-            data: null,
-            error: e.message || String(e),
-            source: 'admin',
+            error: null,
             favoriteId,
           },
+        ])
+        setAdminClarDraft({})
+        const botContent = buildBotHistoryContent(data)
+        setAdminChatApiHistory((prev) => {
+          const next = [
+            ...prev,
+            { role: 'user', content: q },
+            { role: 'assistant', content: botContent },
+          ]
+          adminHistoryRef.current = next
+          return next
+        })
+      } catch (e) {
+        setAdminChatMessages((prev) => [
           ...prev,
+          {
+            id: botMsgId,
+            role: 'assistant',
+            data: null,
+            query: q,
+            error: e.message || String(e),
+            favoriteId,
+          },
         ])
       } finally {
         setIsAdminQueryLoading(false)
@@ -652,7 +1079,15 @@ export default function App() {
   )
 
   const submitAdminQuery = async () => {
-    await executeAdminQuery(adminQueryText, {})
+    let q = adminQueryText
+    if (pendingAdminClar?.data) {
+      q = buildClarificationSubmitText(
+        pendingAdminClar.data.clarifications,
+        adminClarDraft,
+        adminQueryText,
+      )
+    }
+    await executeAdminQuery(q, {})
   }
 
   const handleAddFavorite = useCallback((pool, naturalLanguageQuery) => {
@@ -677,9 +1112,9 @@ export default function App() {
       if (linked) {
         if (!window.confirm('즐겨찾기를 해제하시겠습니까?')) return
         setFavorites(removeFavorite('customer', item.favoriteId))
-        setResults((prev) =>
-          prev.map((r) =>
-            r.id === item.id ? { ...r, favoriteId: undefined } : r,
+        setChatMessages((prev) =>
+          prev.map((m) =>
+            m.id === item.id ? { ...m, favoriteId: undefined } : m,
           ),
         )
         return
@@ -699,9 +1134,9 @@ export default function App() {
       if (linked) {
         if (!window.confirm('즐겨찾기를 해제하시겠습니까?')) return
         setFavorites(removeFavorite('admin', item.favoriteId))
-        setAdminResults((prev) =>
-          prev.map((r) =>
-            r.id === item.id ? { ...r, favoriteId: undefined } : r,
+        setAdminChatMessages((prev) =>
+          prev.map((m) =>
+            m.id === item.id ? { ...m, favoriteId: undefined } : m,
           ),
         )
         return
@@ -713,14 +1148,14 @@ export default function App() {
   )
 
   const onKeyDown = (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       submitQuery()
     }
   }
 
   const onAdminKeyDown = (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       submitAdminQuery()
     }
@@ -742,7 +1177,7 @@ export default function App() {
     persistAdminToken('')
     setAdminPwd('')
     setAdminLoginErr('')
-    setAdminResults([])
+    clearAdminChat()
   }
 
   const handleResetPool = async (pool) => {
@@ -753,6 +1188,25 @@ export default function App() {
       await loadStats()
     } catch (err) {
       alert(err.message || String(err))
+    }
+  }
+
+  const handleDeleteTable = async (e, tableName, pool) => {
+    e.stopPropagation()
+    if (!adminToken || !confirm(`'${tableName}' 테이블을 삭제할까요?`)) return
+    setDeletingTables((prev) => new Set(prev).add(tableName))
+    try {
+      await deleteTable(tableName, pool, adminToken)
+      await loadTables()
+      await loadStats()
+    } catch (err) {
+      alert(err.message || String(err))
+    } finally {
+      setDeletingTables((prev) => {
+        const next = new Set(prev)
+        next.delete(tableName)
+        return next
+      })
     }
   }
 
@@ -964,24 +1418,43 @@ export default function App() {
                       </p>
                     )}
                     {filteredTables.map((row) => (
-                      <button
+                      <div
                         key={`${adminPreviewPool}-${row.table_name}`}
-                        type="button"
+                        role="button"
+                        tabIndex={0}
                         className={`table-row ${selectedTable?.table_name === row.table_name ? 'selected' : ''}`}
                         onClick={() => handleRowClick(row)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') handleRowClick(row)
+                        }}
                       >
                         <div className="table-row-top">
                           <span className="table-name">{row.table_name}</span>
-                          {tableCategory === '전체' && (
-                            <span
-                              className={`domain-badge ${domainBadgeClass(row.domain)}`}
-                            >
-                              {row.domain || '기타'}
-                            </span>
-                          )}
+                          <div className="table-row-actions">
+                            {tableCategory === '전체' && (
+                              <span
+                                className={`domain-badge ${domainBadgeClass(row.domain)}`}
+                              >
+                                {row.domain || '기타'}
+                              </span>
+                            )}
+                            {adminToken && (
+                              <button
+                                type="button"
+                                className="btn-delete-table"
+                                title={`${row.table_name} 삭제`}
+                                disabled={deletingTables.has(row.table_name)}
+                                onClick={(e) =>
+                                  handleDeleteTable(e, row.table_name, adminPreviewPool)
+                                }
+                              >
+                                {deletingTables.has(row.table_name) ? '…' : '×'}
+                              </button>
+                            )}
+                          </div>
                         </div>
                         <div className="table-ko">{row.korean_name || '—'}</div>
-                      </button>
+                      </div>
                     ))}
                   </div>
                 </>
@@ -1224,17 +1697,16 @@ export default function App() {
       </aside>
 
       <main className="main">
-        {sidebarTab === 'query' && stats && (
-          <aside className="main-stats-dock" aria-label="인덱스 요약">
-            <div className="stats-line">
-              <strong>{stats.total_tables}</strong> 테이블 (고객 풀)
-            </div>
-            {domainSummary && (
-              <div className="stats-sub muted small">{domainSummary}</div>
-            )}
-            <div className="stats-sub muted small mono">{stats.model}</div>
-          </aside>
-        )}
+        <div className="app-top-bar">
+          <button
+            type="button"
+            className="btn-mockup"
+            onClick={() => setShowHfsrPopup(true)}
+            title="HFSR 화면 열기"
+          >
+            HFSR
+          </button>
+        </div>
 
         {sidebarTab === 'admin' && adminToken && adminSummary && (
           <aside className="main-stats-dock" aria-label="풀별 인덱스 요약">
@@ -1252,460 +1724,337 @@ export default function App() {
           </aside>
         )}
 
-        <div className="main-inner">
-          {sidebarTab === 'query' && (
-            <div className="input-card">
-              <div className="sql-format-block">
-                <div className="sql-format-labels">
-                  <span className="input-field-label">SQL 종류</span>
-                  <span className="input-field-hint">
-                    현업·고객용 — SAS PROC SQL만 생성합니다. 스키마 검색은{' '}
-                    <strong>고객 풀 전체</strong> 테이블을 대상으로 하며, 왼쪽에서
-                    고른 테이블의 카테고리로 검색을 막지 않습니다. 테이블명{' '}
-                    <code className="inline-code">TBL_</code>뒤 붙여 쓰기(예:
-                    TBL_CUSTDIM → 별칭 dim)
-                  </span>
-                </div>
-                <div className="dialect-badge-static">SAS PROC SQL</div>
-              </div>
+        {sidebarTab === 'query' ? (
+          <div className="chat-pane">
+            <div className="chat-header">
+              <span className="chat-header-badge">SAS PROC SQL</span>
+              <span className="chat-header-hint">
+                고객 풀 · 첫 질의 후 입력창에서 추가 요청으로 SQL 수정
+                {stats ? ` · ${stats.total_tables}개 테이블` : ''}
+              </span>
+              {chatMessages.length > 0 && (
+                <button
+                  type="button"
+                  className="btn-new-chat"
+                  onClick={clearCustomerChat}
+                >
+                  새 대화
+                </button>
+              )}
+            </div>
 
-              <div className="query-input-wrap">
+            <div className="chat-messages" ref={chatScrollRef}>
+              {chatMessages.length === 0 && (
+                <div className="empty-state">
+                  <IconEmpty className="empty-state-icon" />
+                  <p>
+                    자연어로 질의하세요.
+                    <br />
+                    <span className="empty-sub">
+                      데이터가 없으면 관리자 탭에서 고객 풀 정의서를 올려 주세요.
+                    </span>
+                  </p>
+                </div>
+              )}
+
+              {chatMessages.map((msg) =>
+                msg.role === 'user' ? (
+                  <div key={msg.id} className="chat-row chat-row-user">
+                    <div className="chat-bubble-user">{msg.text}</div>
+                  </div>
+                ) : (
+                  <div key={msg.id} className="chat-row chat-row-bot">
+                    <div className="chat-bubble-bot">
+                      <AssistantBubble
+                        msg={msg}
+                        dialectLabel={
+                          msg.data.dialect === 'oracle' ? 'Oracle' : 'SAS'
+                        }
+                        oracleProfile={null}
+                        favoritesList={favorites.customer}
+                        onFavoriteClick={handleFavoriteStarCustomer}
+                        isClarificationActive={
+                          pendingCustomerClar?.id === msg.id
+                        }
+                        clarDraft={customerClarDraft}
+                        onClarOptionSelect={handleCustomerClarOption}
+                        onClarTextChange={handleCustomerClarText}
+                      />
+                    </div>
+                  </div>
+                ),
+              )}
+
+              {isLoading && (
+                <div className="chat-row chat-row-bot">
+                  <div className="chat-bubble-bot chat-thinking">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </div>
+
+            <div className="chat-input-bar">
+              {favorites.customer.length > 0 && (
+                <>
+                  <div className="chips-row favorites-chips">
+                    {favorites.customer.map((f) => (
+                      <div key={f.id} className="favorite-chip-wrap">
+                        <button
+                          type="button"
+                          className="chip favorite-chip"
+                          title={f.query}
+                          onClick={() =>
+                            void executeCustomerQuery(f.query, {
+                              favoriteId: f.id,
+                            })
+                          }
+                        >
+                          <span className="favorite-chip-icon" aria-hidden>
+                            ★
+                          </span>
+                          {f.name}
+                        </button>
+                        <button
+                          type="button"
+                          className="favorite-chip-remove"
+                          aria-label={`${f.name} 즐겨찾기 삭제`}
+                          onClick={() =>
+                            setFavorites(removeFavorite('customer', f.id))
+                          }
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="muted small chips-hint">
+                    즐겨찾기 · SQL 버블에서 ☆로 추가합니다.
+                  </p>
+                </>
+              )}
+
+              <div className="chat-input-row">
                 <textarea
-                  className="query-input"
-                  placeholder="자연어로 질의를 입력하세요… (Ctrl+Enter로 생성)"
+                  className="chat-textarea"
+                  placeholder={
+                    pendingCustomerClar
+                      ? CHAT_PLACEHOLDER_CLARIFY
+                      : chatMessages.length > 0
+                        ? CHAT_PLACEHOLDER_FOLLOWUP
+                        : CHAT_PLACEHOLDER_INITIAL
+                  }
                   value={queryText}
                   onChange={(e) => setQueryText(e.target.value)}
                   onKeyDown={onKeyDown}
-                  rows={5}
+                  rows={2}
                   disabled={isLoading}
                 />
-              </div>
-              <div className="input-actions">
                 <button
                   type="button"
-                  className="btn-secondary"
-                  onClick={() => setQueryText('')}
-                  disabled={isLoading || !queryText}
-                  title="입력한 질의 지우기"
-                >
-                  초기화
-                </button>
-                <button
-                  type="button"
-                  className="btn-primary"
+                  className="btn-primary btn-send"
                   onClick={submitQuery}
-                  disabled={isLoading || !queryText.trim()}
+                  disabled={isLoading || !customerClarSendReady}
                 >
-                  {isLoading ? '생성 중…' : '생성'}
+                  {isLoading ? '…' : '전송'}
                 </button>
               </div>
-              <div className="chips-row favorites-chips">
-                {favorites.customer.map((f) => (
-                  <div key={f.id} className="favorite-chip-wrap">
-                    <button
-                      type="button"
-                      className="chip favorite-chip"
-                      title={f.query}
-                      onClick={() =>
-                        void executeCustomerQuery(f.query, {
-                          favoriteId: f.id,
-                        })
-                      }
-                    >
-                      <span className="favorite-chip-icon" aria-hidden>
-                        ★
-                      </span>
-                      {f.name}
-                    </button>
-                    <button
-                      type="button"
-                      className="favorite-chip-remove"
-                      aria-label={`${f.name} 즐겨찾기 삭제`}
-                      onClick={() =>
-                        setFavorites(removeFavorite('customer', f.id))
-                      }
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <p className="muted small chips-hint">
-                고객 풀 즐겨찾기(이 브라우저 저장). 성공한 질의 결과 카드에서
-                ☆로 추가합니다.
-              </p>
             </div>
-          )}
-
-          {sidebarTab === 'admin' && adminToken && (
-            <div className="input-card admin-oracle-card">
-              <div className="sql-format-block">
-                <div className="sql-format-labels">
-                  <span className="input-field-label">Oracle SQL</span>
-                  <span className="input-field-hint">
-                    관리자 풀(TB_*) 전체를 스키마 검색 대상으로 하며, 유사 테이블이
-                    없으면 풀에 있는 테이블 정의를 모두 넣어 생성합니다. 조회 또는
-                    DML(INSERT·MERGE·UPDATE·DELETE)
-                  </span>
-                </div>
-                <div className="dialect-toggle dialect-toggle-main">
-                  <button
-                    type="button"
-                    className={oracleProfile === 'select_only' ? 'active' : ''}
-                    onClick={() => setOracleProfile('select_only')}
-                  >
-                    조회만
-                  </button>
-                  <button
-                    type="button"
-                    className={oracleProfile === 'admin_dml' ? 'active' : ''}
-                    onClick={() => setOracleProfile('admin_dml')}
-                  >
-                    DML 허용
-                  </button>
-                </div>
-              </div>
-              <div className="query-input-wrap">
-                <textarea
-                  className="query-input"
-                  placeholder="자연어로 Oracle 작업을 설명하세요… (Ctrl+Enter)"
-                  value={adminQueryText}
-                  onChange={(e) => setAdminQueryText(e.target.value)}
-                  onKeyDown={onAdminKeyDown}
-                  rows={5}
-                  disabled={isAdminQueryLoading}
-                />
-              </div>
-              <div className="input-actions">
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => setAdminQueryText('')}
-                  disabled={isAdminQueryLoading || !adminQueryText}
-                >
-                  초기화
-                </button>
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={submitAdminQuery}
-                  disabled={isAdminQueryLoading || !adminQueryText.trim()}
-                >
-                  {isAdminQueryLoading ? '생성 중…' : 'Oracle SQL 생성'}
-                </button>
-              </div>
-              <div className="chips-row favorites-chips">
-                {favorites.admin.map((f) => (
-                  <div key={f.id} className="favorite-chip-wrap">
-                    <button
-                      type="button"
-                      className="chip favorite-chip"
-                      title={f.query}
-                      onClick={() =>
-                        void executeAdminQuery(f.query, { favoriteId: f.id })
-                      }
-                    >
-                      <span className="favorite-chip-icon" aria-hidden>
-                        ★
-                      </span>
-                      {f.name}
-                    </button>
-                    <button
-                      type="button"
-                      className="favorite-chip-remove"
-                      aria-label={`${f.name} 즐겨찾기 삭제`}
-                      onClick={() =>
-                        setFavorites(removeFavorite('admin', f.id))
-                      }
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <p className="muted small chips-hint">
-                관리자 풀 즐겨찾기(이 브라우저 저장). 성공한 Oracle 결과 카드에서
-                ☆로 추가합니다.
-              </p>
-            </div>
-          )}
-
-          {sidebarTab === 'admin' && !adminToken && (
+          </div>
+        ) : sidebarTab === 'admin' && !adminToken ? (
+          <div className="main-inner">
             <div className="input-card admin-placeholder-card">
               <p className="muted">
                 왼쪽 사이드바에서 관리자 로그인 후 Oracle SQL 생성·정의서
                 업로드를 사용할 수 있습니다.
               </p>
             </div>
-          )}
-
-          <div className="results-area">
-            {sidebarTab === 'query' && results.length === 0 && (
-              <div className="empty-state">
-                <IconEmpty className="empty-state-icon" />
-                <p>
-                  테이블을 선택하고 자연어로 질의하세요.
-                  <br />
-                  <span className="empty-sub">
-                    데이터가 없으면 관리자 탭에서 고객 풀 정의서를 올려 주세요.
-                  </span>
-                </p>
+          </div>
+        ) : sidebarTab === 'admin' && adminToken ? (
+          <div className="chat-pane">
+            <div className="chat-header">
+              <span className="chat-header-badge">Oracle SQL</span>
+              <span className="chat-header-hint">
+                관리자 풀 · 첫 질의 후 추가 요청으로 SQL 수정
+                {adminSummary
+                  ? ` · ${adminSummary.admin?.total ?? 0}개 테이블`
+                  : ''}
+              </span>
+              <div className="dialect-toggle dialect-toggle-compact">
+                <button
+                  type="button"
+                  className={oracleProfile === 'select_only' ? 'active' : ''}
+                  onClick={() => setOracleProfile('select_only')}
+                >
+                  조회만
+                </button>
+                <button
+                  type="button"
+                  className={oracleProfile === 'admin_dml' ? 'active' : ''}
+                  onClick={() => setOracleProfile('admin_dml')}
+                >
+                  DML
+                </button>
               </div>
-            )}
+              {adminChatMessages.length > 0 && (
+                <button
+                  type="button"
+                  className="btn-new-chat"
+                  onClick={clearAdminChat}
+                >
+                  새 대화
+                </button>
+              )}
+            </div>
 
-            {sidebarTab === 'admin' &&
-              adminToken &&
-              adminResults.length === 0 && (
+            <div className="chat-messages">
+              {adminChatMessages.length === 0 && (
                 <div className="empty-state">
                   <IconEmpty className="empty-state-icon" />
                   <p>
-                    관리자 풀에 인덱싱된 테이블을 바탕으로 Oracle SQL을 생성할
-                    수 있습니다. DDL(CREATE·ALTER·DROP·TRUNCATE)은 생성되지
-                    않습니다.
+                    자연어로 Oracle SQL을 생성하세요.
+                    <br />
+                    <span className="empty-sub">
+                      예: 2026년 9월 이전 연체 건 조회 → 이어서 «연체일자 컬럼
+                      추가»처럼 수정 요청
+                    </span>
                   </p>
                 </div>
               )}
 
-            {sidebarTab === 'query' &&
-              results.map((item) => (
-                <article key={item.id} className="result-card">
-                {item.error ? (
-                  <>
-                    <div className="card-head">
-                      <span className="card-query">{item.query}</span>
-                      <span className="badge err">오류</span>
-                    </div>
-                    <div className="sql-null-box">{item.error}</div>
-                  </>
-                ) : !item.data ? (
-                  <>
-                    <div className="card-head">
-                      <span className="card-query">{item.query}</span>
-                      <span className="badge err">오류</span>
-                    </div>
-                    <div className="sql-null-box">
-                      서버 응답을 표시할 수 없습니다. 잠시 후 다시 시도해 주세요.
-                    </div>
-                  </>
+              {adminChatMessages.map((msg) =>
+                msg.role === 'user' ? (
+                  <div key={msg.id} className="chat-row chat-row-user">
+                    <div className="chat-bubble-user">{msg.text}</div>
+                  </div>
                 ) : (
-                  <>
-                    <div className="card-head">
-                      <span className="card-query">{item.query}</span>
-                      <span
-                        className={`conf-badge ${confidenceClass(item.data.confidence)}`}
-                      >
-                        {item.data.confidence}
-                      </span>
-                      <span className="dialect-badge">
-                        {item.data.dialect === 'oracle' ? 'Oracle' : 'SAS'}
-                      </span>
-                      <div className="card-head-actions">
-                        <button
-                          type="button"
-                          className="btn-copy"
-                          onClick={() => {
-                            if (item.data.sql)
-                              navigator.clipboard.writeText(item.data.sql)
-                          }}
-                          disabled={!item.data.sql}
-                        >
-                          복사
-                        </button>
-                        <button
-                          type="button"
-                          className={`btn-favorite ${
-                            isFavoriteLinked(
-                              favorites.customer,
-                              item.favoriteId,
-                            )
-                              ? 'btn-favorite-on'
-                              : ''
-                          }`}
-                          onClick={() => handleFavoriteStarCustomer(item)}
-                          disabled={
-                            !isFavoriteLinked(
-                              favorites.customer,
-                              item.favoriteId,
-                            ) && !item.data.sql
-                          }
-                          title={
-                            isFavoriteLinked(
-                              favorites.customer,
-                              item.favoriteId,
-                            )
-                              ? '즐겨찾기 해제'
-                              : '즐겨찾기에 추가'
-                          }
-                          aria-label={
-                            isFavoriteLinked(
-                              favorites.customer,
-                              item.favoriteId,
-                            )
-                              ? '즐겨찾기 해제'
-                              : '즐겨찾기에 추가'
-                          }
-                        >
-                          {isFavoriteLinked(
-                            favorites.customer,
-                            item.favoriteId,
-                          )
-                            ? '★'
-                            : '☆'}
-                        </button>
-                      </div>
-                    </div>
-
-                    {item.data.sql ? (
-                      <SqlBlock
-                        sql={item.data.sql}
-                        onCopy={() =>
-                          navigator.clipboard.writeText(item.data.sql)
-                        }
+                  <div key={msg.id} className="chat-row chat-row-bot">
+                    <div className="chat-bubble-bot">
+                      <AssistantBubble
+                        msg={msg}
+                        dialectLabel="Oracle"
+                        oracleProfile={oracleProfile}
+                        favoritesList={favorites.admin}
+                        onFavoriteClick={handleFavoriteStarAdmin}
+                        isClarificationActive={pendingAdminClar?.id === msg.id}
+                        clarDraft={adminClarDraft}
+                        onClarOptionSelect={handleAdminClarOption}
+                        onClarTextChange={handleAdminClarText}
                       />
-                    ) : (
-                      <div className="sql-null-box">
-                        쿼리를 생성할 수 없습니다
-                      </div>
-                    )}
-
-                    {item.data.clarification_needed && (
-                      <div className="clar-box">
-                        {item.data.clarification_needed}
-                      </div>
-                    )}
-
-                    <p className="explanation">{item.data.explanation}</p>
-
-                    <div className="used-tables">
-                      {(item.data.used_tables || []).map((t) => (
-                        <span key={t} className="used-chip">
-                          {t}
-                        </span>
-                      ))}
                     </div>
-                  </>
-                )}
-                </article>
-              ))}
+                  </div>
+                ),
+              )}
 
-            {sidebarTab === 'admin' &&
-              adminToken &&
-              adminResults.map((item) => (
-                <article key={item.id} className="result-card">
-                  {item.error ? (
-                    <>
-                      <div className="card-head">
-                        <span className="card-query">{item.query}</span>
-                        <span className="badge err">오류</span>
-                      </div>
-                      <div className="sql-null-box">{item.error}</div>
-                    </>
-                  ) : !item.data ? (
-                    <>
-                      <div className="card-head">
-                        <span className="card-query">{item.query}</span>
-                        <span className="badge err">오류</span>
-                      </div>
-                      <div className="sql-null-box">
-                        서버 응답을 표시할 수 없습니다. 잠시 후 다시 시도해 주세요.
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="card-head">
-                        <span className="card-query">{item.query}</span>
-                        <span
-                          className={`conf-badge ${confidenceClass(item.data.confidence)}`}
-                        >
-                          {item.data.confidence}
-                        </span>
-                        <span className="dialect-badge">Oracle</span>
-                        {item.data.oracle_profile && (
-                          <span className="dialect-badge subtle">
-                            {item.data.oracle_profile === 'admin_dml'
-                              ? 'DML'
-                              : '조회'}
-                          </span>
-                        )}
-                        <div className="card-head-actions">
-                          <button
-                            type="button"
-                            className="btn-copy"
-                            onClick={() => {
-                              if (item.data.sql)
-                                navigator.clipboard.writeText(item.data.sql)
-                            }}
-                            disabled={!item.data.sql}
-                          >
-                            복사
-                          </button>
-                          <button
-                            type="button"
-                            className={`btn-favorite ${
-                              isFavoriteLinked(favorites.admin, item.favoriteId)
-                                ? 'btn-favorite-on'
-                                : ''
-                            }`}
-                            onClick={() => handleFavoriteStarAdmin(item)}
-                            disabled={
-                              !isFavoriteLinked(
-                                favorites.admin,
-                                item.favoriteId,
-                              ) && !item.data.sql
-                            }
-                            title={
-                              isFavoriteLinked(favorites.admin, item.favoriteId)
-                                ? '즐겨찾기 해제'
-                                : '즐겨찾기에 추가'
-                            }
-                            aria-label={
-                              isFavoriteLinked(favorites.admin, item.favoriteId)
-                                ? '즐겨찾기 해제'
-                                : '즐겨찾기에 추가'
-                            }
-                          >
-                            {isFavoriteLinked(favorites.admin, item.favoriteId)
-                              ? '★'
-                              : '☆'}
-                          </button>
-                        </div>
-                      </div>
+              {isAdminQueryLoading && (
+                <div className="chat-row chat-row-bot">
+                  <div className="chat-bubble-bot chat-thinking">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                </div>
+              )}
 
-                      {item.data.sql ? (
-                        <SqlBlock
-                          sql={item.data.sql}
-                          onCopy={() =>
-                            navigator.clipboard.writeText(item.data.sql)
+              <div ref={adminMessagesEndRef} />
+            </div>
+
+            <div className="chat-input-bar">
+              {favorites.admin.length > 0 && (
+                <>
+                  <div className="chips-row favorites-chips">
+                    {favorites.admin.map((f) => (
+                      <div key={f.id} className="favorite-chip-wrap">
+                        <button
+                          type="button"
+                          className="chip favorite-chip"
+                          title={f.query}
+                          onClick={() =>
+                            void executeAdminQuery(f.query, {
+                              favoriteId: f.id,
+                            })
                           }
-                        />
-                      ) : (
-                        <div className="sql-null-box">
-                          쿼리를 생성할 수 없습니다
-                        </div>
-                      )}
-
-                      {item.data.clarification_needed && (
-                        <div className="clar-box">
-                          {item.data.clarification_needed}
-                        </div>
-                      )}
-
-                      <p className="explanation">{item.data.explanation}</p>
-
-                      <div className="used-tables">
-                        {(item.data.used_tables || []).map((t) => (
-                          <span key={t} className="used-chip">
-                            {t}
+                        >
+                          <span className="favorite-chip-icon" aria-hidden>
+                            ★
                           </span>
-                        ))}
+                          {f.name}
+                        </button>
+                        <button
+                          type="button"
+                          className="favorite-chip-remove"
+                          aria-label={`${f.name} 즐겨찾기 삭제`}
+                          onClick={() =>
+                            setFavorites(removeFavorite('admin', f.id))
+                          }
+                        >
+                          ×
+                        </button>
                       </div>
-                    </>
-                  )}
-                </article>
-              ))}
+                    ))}
+                  </div>
+                  <p className="muted small chips-hint">
+                    즐겨찾기 · SQL 버블에서 ☆로 추가합니다.
+                  </p>
+                </>
+              )}
+
+              <div className="chat-input-row">
+                <textarea
+                  className="chat-textarea"
+                  placeholder={
+                    pendingAdminClar
+                      ? CHAT_PLACEHOLDER_CLARIFY
+                      : adminChatMessages.length > 0
+                        ? CHAT_PLACEHOLDER_FOLLOWUP
+                        : '자연어로 Oracle 작업을 설명하세요… (Enter 전송, Shift+Enter 줄바꿈)'
+                  }
+                  value={adminQueryText}
+                  onChange={(e) => setAdminQueryText(e.target.value)}
+                  onKeyDown={onAdminKeyDown}
+                  rows={2}
+                  disabled={isAdminQueryLoading}
+                />
+                <button
+                  type="button"
+                  className="btn-primary btn-send"
+                  onClick={submitAdminQuery}
+                  disabled={isAdminQueryLoading || !adminClarSendReady}
+                >
+                  {isAdminQueryLoading ? '…' : '전송'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </main>
+
+      {/* ── HFSR 플로팅 윈도우 (드래그 이동 가능, 메인 화면 조작 유지) ── */}
+      {showHfsrPopup && (
+        <div
+          className="hfsr-popup-window"
+          ref={hfsrDragRef}
+          style={{ left: hfsrPos.x, top: hfsrPos.y, width: '75vw', height: '75vh' }}
+        >
+          <div className="hfsr-popup-header" onMouseDown={onHfsrHeaderMouseDown}>
+            <span>HFSR 화면 — 수납 마감자료 조회</span>
+            <button
+              type="button"
+              className="hfsr-popup-close"
+              onClick={() => setShowHfsrPopup(false)}
+            >
+              ✕
+            </button>
+          </div>
+          <div className="hfsr-popup-body">
+            <MockupPage />
           </div>
         </div>
-      </main>
+      )}
     </div>
   )
 }

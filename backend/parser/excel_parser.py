@@ -18,7 +18,7 @@ from backend.schema_naming import (
 
 logger = logging.getLogger(__name__)
 
-_TRUE_MARKERS = frozenset({"Y", "O", "1", "TRUE"})
+_TRUE_MARKERS = frozenset({"Y", "O", "1", "TRUE", "PK"})
 
 # 멀티 테이블 모드: 1행 헤더가 아래와 일치·유사하면 «테이블명» 열로 간주합니다.
 _TABLE_NAME_HEADER_KEYS = frozenset(
@@ -52,6 +52,12 @@ _FIELD_ALIASES: dict[str, frozenset[str]] = {
             "col_en",
             "영문컬럼명",
             "columnname(en)",
+            # 물리 컬럼 ID 형식 (예: 컬럼ID → LINE_ID)
+            "컬럼id",
+            "col_id",
+            "columnid",
+            # 메타시스템 단일 테이블 정의서(순번·컬럼·데이터유형…)
+            "컬럼",
         }
     ),
     "name_ko": frozenset(
@@ -61,15 +67,70 @@ _FIELD_ALIASES: dict[str, frozenset[str]] = {
             "name_ko",
             "col_ko",
             "한글컬럼명",
+            # 논리/한글 컬럼명 변형
+            "논리컬럼명",
+            "컬럼한글명",
+            # ENTITY COLUMN LIST 등: 논리명 열 헤더가 «컬럼명»
+            "컬럼명",
         }
     ),
-    "data_type": frozenset({"타입", "type", "datatype", "dtype", "데이터타입"}),
+    "data_type": frozenset(
+        {
+            "타입",
+            "type",
+            "datatype",
+            "dtype",
+            "데이터타입",
+            # 물리 데이터 타입 변형
+            "물리데이터타입",
+            "물리타입",
+            "데이터유형",
+            "데이터타입",
+        }
+    ),
     "pk": frozenset({"pk", "primary", "primarykey", "기본키"}),
     "fk": frozenset({"fk참조", "fk", "fk_ref", "fkreference", "외래키"}),
     "nullable": frozenset({"null허용", "nullable", "null", "널허용"}),
     "description": frozenset({"설명", "description", "desc", "비고"}),
     "indexed": frozenset({"인덱스", "indexed", "idx", "index"}),
 }
+
+
+def _infer_domain_from_filename(path: Path) -> str | None:
+    """
+    정의서 파일명에서 도메인을 추론합니다.
+
+    관행상 파일명이 `테이블정의서(도메인명)_날짜` 형태이므로 첫 괄호의
+    (중첩 괄호를 포함한) 짝을 맞춰 안쪽 문자열을 도메인으로 사용합니다.
+    예) `테이블정의서(대응개발_융자(FN))_20260327` → `대응개발_융자(FN)`
+    괄호가 없으면 None을 반환합니다.
+    """
+    stem = path.stem
+    start = stem.find("(")
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(stem)):
+        ch = stem[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                inner = stem[start + 1 : i].strip()
+                return inner or None
+    # 짝이 맞지 않으면 여는 괄호 이후 전체를 사용
+    inner = stem[start + 1 :].strip()
+    return inner or None
+
+
+def _compose_domain(d1: str, d2: str) -> str:
+    """1차/2차 주제영역을 하나의 도메인 문자열로 합칩니다(동일하면 중복 제거)."""
+    d1 = (d1 or "").strip()
+    d2 = (d2 or "").strip()
+    if d1 and d2 and d1 != d2:
+        return f"{d1} / {d2}"
+    return d1 or d2 or ""
 
 
 def _parse_bool(cell: Any) -> bool:
@@ -121,6 +182,10 @@ def _cell_looks_like_pool_table_name(cell: Any) -> bool:
 
 
 def _find_table_name_column(headers: list[str]) -> int | None:
+    # 논리 «테이블명»보다 물리 «테이블ID»(TB_*)를 우선합니다.
+    for i, h in enumerate(headers):
+        if _header_key(h) in ("테이블id", "tableid"):
+            return i
     for i, h in enumerate(headers):
         if _header_key(h) in _TABLE_NAME_HEADER_KEYS:
             return i
@@ -215,7 +280,13 @@ def _resolve_field_columns(
     if not missing:
         return out  # type: ignore[return-value]
 
-    # 순차 배치: 테이블명 다음 8열 = 레거시 A~H와 동일 순서
+    # name_en이 alias로 찾혔으면 헤더 인식 완료.
+    # 나머지 None 필드는 parse_column에서 False/빈값으로 처리되므로 그대로 반환합니다.
+    # (순차 배정이 이미 올바르게 찾힌 pk/fk 등을 덮어쓰지 않도록 방지)
+    if out.get("name_en") is not None:
+        return out  # type: ignore[return-value]
+
+    # 완전히 미인식 형식: 테이블명 다음 8열을 레거시 A~H 순서로 배정합니다.
     if table_idx + 8 <= n:
         order = [
             "name_en",
@@ -309,6 +380,7 @@ def _parse_multi_table_sheet(
         )
 
     src = str(path.resolve())
+    domain_fallback = _infer_domain_from_filename(path) or "기타"
     out: list[TableSchema] = []
     for tkey in sorted(columns_by_table.keys()):
         cols = columns_by_table[tkey]
@@ -322,7 +394,7 @@ def _parse_multi_table_sheet(
             TableSchema(
                 table_name=tkey,
                 korean_name=ko if ko else tkey,
-                domain=dom if dom else "기타",
+                domain=dom if dom else domain_fallback,
                 description=desc if desc is not None else "",
                 source_file=src,
                 columns=cols,
@@ -332,6 +404,176 @@ def _parse_multi_table_sheet(
     if not out:
         raise ValueError("멀티 테이블 형식: 유효한 테이블이 없습니다.")
     return out
+
+
+def _headers_match_compact_meta(headers: list[str]) -> bool:
+    """순번·컬럼·데이터유형 형식(테이블 1개·파일명=테이블명) 헤더인지."""
+    keys = {_header_key(h) for h in headers if _str_cell(h)}
+    return "컬럼" in keys and ("데이터유형" in keys or "데이터타입" in keys)
+
+
+def _find_compact_meta_header_row(rows: list[tuple[Any, ...]]) -> int | None:
+    for ri, row in enumerate(rows[:30]):
+        if not row:
+            continue
+        headers = [_str_cell(c) for c in row]
+        if _headers_match_compact_meta(headers):
+            return ri
+    return None
+
+
+def _build_compact_col_map(headers: list[str]) -> dict[str, int | None]:
+    keys = [_header_key(h) for h in headers]
+    out: dict[str, int | None] = {
+        "name_en": None,
+        "data_type": None,
+        "length": None,
+        "pk": None,
+        "fk": None,
+        "nullable_nn": None,
+        "description": None,
+    }
+    for i, k in enumerate(keys):
+        if k == "컬럼":
+            out["name_en"] = i
+        elif k in ("데이터유형", "데이터타입"):
+            out["data_type"] = i
+        elif k == "길이":
+            out["length"] = i
+        elif k == "pk":
+            out["pk"] = i
+        elif k == "fk":
+            out["fk"] = i
+        elif k == "nn":
+            out["nullable_nn"] = i
+        elif k in ("설명", "description", "desc", "비고"):
+            out["description"] = i
+    return out
+
+
+def _compose_type_with_length(dtype: str, length: str) -> str:
+    """데이터유형 + 길이 열을 하나의 타입 문자열로 합칩니다."""
+    dt = (dtype or "").strip().upper()
+    ln = (length or "").strip()
+    if not dt:
+        return ""
+    if dt in ("DATE", "TIMESTAMP", "TIMESTAMP(6)", "CLOB", "BLOB", "LONG"):
+        return dt
+    if ln and dt in ("VARCHAR2", "CHAR", "NVARCHAR2", "NCHAR", "NVARCHAR"):
+        return f"{dt}({ln})"
+    if ln and dt == "NUMBER":
+        return f"NUMBER({ln})"
+    return dt
+
+
+def _parse_nullable_from_nn(cell: Any) -> bool:
+    """NN(Not Null) 열: Y=필수→nullable False, 그 외→nullable True."""
+    s = _str_cell(cell).upper()
+    if not s:
+        return True
+    if s in _TRUE_MARKERS:
+        return False
+    return True
+
+
+def _parse_fk_cell(raw: str) -> tuple[bool, str]:
+    """FK 셀: '테이블.컬럼'만 참조로 저장, Y/O 등 플래그만이면 FK 표시만."""
+    text = (raw or "").strip()
+    if not text:
+        return False, ""
+    if "." in text:
+        return True, canonicalize_fk_reference(text)
+    if text.upper() in _TRUE_MARKERS:
+        return True, ""
+    return False, ""
+
+
+def _parse_compact_meta_sheet(
+    rows: list[tuple[Any, ...]], path: Path
+) -> list[TableSchema] | None:
+    """
+    메타시스템 단일 테이블 정의서: 순번·컬럼·데이터유형·길이·PK·FK·NN·설명.
+    파일명(확장자 제외)에서 테이블명을 정합니다.
+    """
+    header_idx = _find_compact_meta_header_row(rows)
+    if header_idx is None:
+        return None
+
+    headers = [_str_cell(c) for c in rows[header_idx]]
+    cmap = _build_compact_col_map(headers)
+    if cmap["name_en"] is None:
+        return None
+
+    path = Path(path)
+    table_name = canonical_pool_table_name(path.stem.upper())
+    paren_label = _infer_domain_from_filename(path)
+    domain_tbl = paren_label or "기타"
+    korean_tbl = paren_label or table_name
+
+    columns: list[ColumnSchema] = []
+    for row in rows[header_idx + 1 :]:
+        if row is None:
+            continue
+        name_en = _str_cell(_cell_at(tuple(row), cmap["name_en"]))
+        if not name_en or name_en == "##META##":
+            continue
+
+        dtype_raw = _str_cell(_cell_at(tuple(row), cmap["data_type"]))
+        length_raw = (
+            _str_cell(_cell_at(tuple(row), cmap["length"]))
+            if cmap["length"] is not None
+            else ""
+        )
+        data_type = _compose_type_with_length(dtype_raw, length_raw)
+        is_pk = (
+            _parse_bool(_cell_at(tuple(row), cmap["pk"]))
+            if cmap["pk"] is not None
+            else False
+        )
+        fk_raw = (
+            _str_cell(_cell_at(tuple(row), cmap["fk"]))
+            if cmap["fk"] is not None
+            else ""
+        )
+        is_fk, fk_reference = _parse_fk_cell(fk_raw)
+        nullable = (
+            _parse_nullable_from_nn(_cell_at(tuple(row), cmap["nullable_nn"]))
+            if cmap["nullable_nn"] is not None
+            else True
+        )
+        description = (
+            _str_cell(_cell_at(tuple(row), cmap["description"]))
+            if cmap["description"] is not None
+            else ""
+        )
+
+        columns.append(
+            ColumnSchema(
+                name=name_en,
+                korean_name=description,
+                data_type=data_type,
+                is_pk=is_pk,
+                is_fk=is_fk,
+                fk_reference=fk_reference,
+                nullable=nullable,
+                description=description,
+                is_indexed=False,
+            )
+        )
+
+    if not columns:
+        return None
+
+    return [
+        TableSchema(
+            table_name=table_name,
+            korean_name=korean_tbl,
+            domain=domain_tbl,
+            description="",
+            source_file=str(path.resolve()),
+            columns=columns,
+        )
+    ]
 
 
 def _parse_legacy_sheet(rows: list[tuple[Any, ...]], path: Path) -> list[TableSchema]:
@@ -391,13 +633,14 @@ def _parse_legacy_sheet(rows: list[tuple[Any, ...]], path: Path) -> list[TableSc
             )
         )
 
+    domain_fallback = _infer_domain_from_filename(path) or "기타"
     if meta_found:
         korean_tbl = meta_korean if meta_korean else table_name
-        domain_tbl = meta_domain if meta_domain else "기타"
+        domain_tbl = meta_domain if meta_domain else domain_fallback
         desc_tbl = meta_description if meta_description is not None else ""
     else:
         korean_tbl = table_name
-        domain_tbl = "기타"
+        domain_tbl = domain_fallback
         desc_tbl = ""
 
     return [
@@ -412,9 +655,42 @@ def _parse_legacy_sheet(rows: list[tuple[Any, ...]], path: Path) -> list[TableSc
     ]
 
 
+_READ_ONLY_FALLBACK_MAX_COL = 64
+
+
+def _read_sheet_rows(ws: Any) -> list[tuple[Any, ...]]:
+    """
+    시트 전체 행을 읽습니다.
+
+    일부 내보내기 xlsx는 read_only 모드에서 dimension이 1열로만 잡혀
+    `iter_rows(values_only=True)`가 A열만 반환합니다. 짧은 행이면 max_col을 넓혀 재읽습니다.
+    """
+    rows = list(ws.iter_rows(min_row=1, values_only=True))
+    if not rows:
+        return rows
+    widths = [len(r) for r in rows[:20] if r]
+    if widths and max(widths) <= 1:
+        return list(
+            ws.iter_rows(
+                min_row=1,
+                max_row=100_000,
+                min_col=1,
+                max_col=_READ_ONLY_FALLBACK_MAX_COL,
+                values_only=True,
+            )
+        )
+    return rows
+
+
 def _sheet_has_dw_wide_header(ws: Any) -> bool:
     """DW 스타일: 한 행에 «테이블명»·«컬럼명» 헤더가 함께 있는지."""
-    for row in ws.iter_rows(min_row=1, max_row=50, values_only=True):
+    for row in ws.iter_rows(
+        min_row=1,
+        max_row=50,
+        min_col=1,
+        max_col=_READ_ONLY_FALLBACK_MAX_COL,
+        values_only=True,
+    ):
         if not row:
             continue
         joined = "".join(_str_cell(c) for c in row)
@@ -538,11 +814,9 @@ def _parse_dw_wide_format(
                 if "d2" in col_map
                 else ""
             )
-            table_domain[tkey] = (
-                f"{d1} / {d2}".strip().strip("/").strip()
-                if d2
-                else (d1 or "기타")
-            )
+            composed = _compose_domain(d1, d2)
+            if composed:
+                table_domain[tkey] = composed
 
         dt_str = _dw_compose_type(row, col_map)
         pk_cell = _cell_at(row, col_map.get("pk"))
@@ -570,6 +844,7 @@ def _parse_dw_wide_format(
         return None
 
     src = str(path.resolve())
+    domain_fallback = _infer_domain_from_filename(path) or "기타"
     out: list[TableSchema] = []
     for tkey in sorted(columns_by_table.keys()):
         cols = columns_by_table[tkey]
@@ -579,7 +854,7 @@ def _parse_dw_wide_format(
             TableSchema(
                 table_name=tkey,
                 korean_name=table_ko.get(tkey) or tkey,
-                domain=table_domain.get(tkey) or "기타",
+                domain=table_domain.get(tkey) or domain_fallback,
                 description="",
                 source_file=src,
                 columns=cols,
@@ -626,7 +901,7 @@ def parse_file(file_path: str | Path) -> list[TableSchema]:
 
         sheet_name = _select_schema_sheet(wb)
         ws = wb[sheet_name]
-        rows = list(ws.iter_rows(min_row=1, values_only=True))
+        rows = _read_sheet_rows(ws)
         if not rows:
             raise ValueError(f"빈 시트입니다: {path.name}")
 
@@ -641,6 +916,11 @@ def parse_file(file_path: str | Path) -> list[TableSchema]:
 
         if table_col is not None:
             return _parse_multi_table_sheet(rows, path, headers, table_col)
+
+        compact = _parse_compact_meta_sheet(rows, path)
+        if compact is not None:
+            return compact
+
         return _parse_legacy_sheet(rows, path)
     finally:
         wb.close()

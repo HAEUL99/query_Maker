@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "concurrently -k -n api,web -c blue,magenta \"npm run dev:api\" \"npm run dev:web\"",
-    "dev:api": "cross-env PYTHONPATH=. uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload",
+    "dev:api": "cross-env PYTHONPATH=. ../.venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload",
     "dev:web": "npm run dev --prefix frontend"
   },
   "devDependencies": {

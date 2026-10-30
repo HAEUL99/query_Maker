@@ -739,6 +739,23 @@ class SchemaVectorStore:
             "admin": self.get_stats(schema_pool="admin"),
         }
 
+    def delete_table(self, table_name: str, *, schema_pool: SchemaPool = "customer") -> bool:
+        """단일 테이블을 벡터스토어에서 삭제합니다. 삭제 성공 시 True, 존재하지 않으면 False."""
+        from backend.schema_naming import canonical_pool_table_name
+
+        coll = self._get_collection(schema_pool)
+        canonical = canonical_pool_table_name(table_name.upper())
+        try:
+            result = coll.get(ids=[canonical])
+            if not result or not result.get("ids"):
+                return False
+            coll.delete(ids=[canonical])
+            logger.info("테이블 삭제 완료: %s (%s)", canonical, schema_pool)
+            return True
+        except Exception:
+            logger.exception("테이블 삭제 중 오류: %s (%s)", table_name, schema_pool)
+            raise
+
     def reset(self, *, schema_pool: SchemaPool = "customer") -> None:
         """지정 풀의 컬렉션을 초기화합니다."""
         self._recreate_collection(schema_pool)
@@ -747,3 +764,120 @@ class SchemaVectorStore:
             self._collection_name(schema_pool),
             schema_pool,
         )
+
+    # ------------------------------------------------------------------
+    # 화면-테이블 매핑 (screen_table_map)
+    # ------------------------------------------------------------------
+
+    _SCREEN_MAP_COLLECTION = "screen_table_map"
+
+    def _get_screen_map_collection(self) -> Collection:
+        name = self._SCREEN_MAP_COLLECTION
+        if name not in self._collection_cache:
+            self._collection_cache[name] = self._chroma.get_or_create_collection(
+                name=name,
+                metadata={"hnsw:space": "cosine"},
+            )
+        return self._collection_cache[name]
+
+    def index_screen_map(self, screen_maps: list[dict[str, Any]]) -> dict[str, Any]:
+        """화면-테이블 매핑 목록을 ChromaDB screen_table_map 컬렉션에 인덱싱합니다."""
+        coll = self._get_screen_map_collection()
+        indexed = 0
+        errors: list[str] = []
+
+        for sm in screen_maps:
+            screen_id   = str(sm.get("screen_id", "")).strip()
+            screen_name = str(sm.get("screen_name", "")).strip()
+            tables: list[str] = [t for t in sm.get("tables", []) if t]
+            service   = str(sm.get("service", "")).strip()
+            dbio_file = str(sm.get("dbio_file", "")).strip()
+
+            if not screen_id:
+                errors.append("screen_id가 없어 건너뜁니다.")
+                continue
+
+            tables_str = ", ".join(tables) if tables else "(없음)"
+            doc = (
+                f"화면 {screen_id} ({screen_name})은 "
+                f"서비스 {service}를 통해 DBIO {dbio_file}를 호출하며, "
+                f"다음 테이블을 사용합니다: {tables_str}"
+            )
+            meta: dict[str, Any] = {
+                "screen_id":   screen_id,
+                "screen_name": screen_name,
+                "tables":      ",".join(tables),
+                "service":     service,
+                "dbio_file":   dbio_file,
+            }
+
+            try:
+                embedding = self._embed_one_with_retry(doc)
+                coll.upsert(
+                    ids=[screen_id],
+                    documents=[doc],
+                    embeddings=[embedding],
+                    metadatas=[meta],
+                )
+                indexed += 1
+                logger.info("screen_map 인덱싱 완료: %s (테이블 %s개)", screen_id, len(tables))
+            except Exception as exc:
+                msg = f"{screen_id}: {exc}"
+                logger.exception("screen_map upsert 실패: %s", msg)
+                errors.append(msg)
+
+        return {"indexed": indexed, "errors": errors}
+
+    def search_screen_map(self, query: str, top_k: int = 3) -> list[dict[str, Any]]:
+        """자연어로 화면-테이블 매핑을 검색합니다."""
+        try:
+            coll = self._get_screen_map_collection()
+            n_docs = coll.count()
+            if n_docs == 0:
+                return []
+
+            q_emb = self._embed_one_with_retry(query)
+            raw = coll.query(
+                query_embeddings=[q_emb],
+                n_results=min(top_k, n_docs),
+                include=["documents", "metadatas", "distances"],
+            )
+
+            out: list[dict[str, Any]] = []
+            ids_list  = raw.get("ids") or []
+            docs_list = raw.get("documents") or []
+            meta_list = raw.get("metadatas") or []
+            dist_list = raw.get("distances") or []
+
+            if not ids_list or not ids_list[0]:
+                return out
+
+            for i, _id in enumerate(ids_list[0]):
+                doc  = docs_list[0][i] if docs_list and docs_list[0] else ""
+                meta = meta_list[0][i] if meta_list and meta_list[0] else {}
+                dist = dist_list[0][i] if dist_list and dist_list[0] else 0.0
+                score = float(1.0 - float(dist))
+                tables_raw = (meta or {}).get("tables", "")
+                tables = [t for t in tables_raw.split(",") if t] if tables_raw else []
+                out.append({
+                    "screen_id":   str((meta or {}).get("screen_id",   _id)),
+                    "screen_name": str((meta or {}).get("screen_name", "")),
+                    "tables":      tables,
+                    "service":     str((meta or {}).get("service",     "")),
+                    "dbio_file":   str((meta or {}).get("dbio_file",   "")),
+                    "document":    doc,
+                    "score":       score,
+                })
+            return out
+        except Exception as exc:
+            logger.warning("screen_map 검색 실패: %s", exc)
+            return []
+
+    def get_screen_map_stats(self) -> dict[str, Any]:
+        """screen_table_map 컬렉션의 통계를 반환합니다."""
+        try:
+            coll = self._get_screen_map_collection()
+            return {"total": coll.count(), "collection": self._SCREEN_MAP_COLLECTION}
+        except Exception as exc:
+            logger.warning("screen_map 통계 조회 실패: %s", exc)
+            return {"total": 0, "collection": self._SCREEN_MAP_COLLECTION}

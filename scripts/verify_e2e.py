@@ -67,6 +67,9 @@ def main() -> None:
     print(f"confidence: {result.confidence}")
     print(f"used_tables: {result.used_tables}")
     print(f"clarification_needed: {result.clarification_needed!r}")
+    print(f"clarifications: {len(result.clarifications)} items")
+    for c in result.clarifications:
+        print(f"  - [{c.id}] {c.question!r} kind={c.kind} options={c.options}")
     print(f"input_tokens: {result.input_tokens}  output_tokens: {result.output_tokens}")
     print(f"SQL:\n{result.sql}")
     print(f"설명: {result.explanation}")

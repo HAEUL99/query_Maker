@@ -1,0 +1,4 @@
+PYTHONPATH=. python scripts/index.py \
+  --dir data/excel/sample_customer/ \
+  --pool customer \
+  --reset

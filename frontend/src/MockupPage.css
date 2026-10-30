@@ -1,0 +1,633 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Noto Sans KR', sans-serif;
+  font-size: 13px;
+  background: #f5f5f5;
+  color: #222;
+  min-width: 900px;
+}
+
+/* ── 전체 페이지 ── */
+.mockup-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  position: relative;
+}
+
+/* ── 타이틀바 ── */
+.mockup-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #1e3a5f;
+  color: #fff;
+  padding: 10px 18px;
+  border-bottom: 2px solid #0f2440;
+}
+
+.mockup-title-text {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.mockup-screen-id {
+  font-size: 11px;
+  font-weight: 400;
+  color: #a8c4e0;
+  border: 1px solid #a8c4e0;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+/* ── 조회조건 영역 ── */
+.mockup-search-area {
+  background: #eef2f7;
+  border-bottom: 1px solid #c8d4e3;
+  padding: 10px 18px;
+}
+
+.mockup-search-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.mockup-search-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #3a3a3a;
+  white-space: nowrap;
+}
+
+.mockup-search-input,
+.mockup-search-select {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #aab8c8;
+  border-radius: 3px;
+  background: #fff;
+  font-size: 12px;
+  font-family: inherit;
+  color: #222;
+}
+
+.mockup-search-input {
+  width: 120px;
+  background: #f0f0f0;
+  color: #555;
+}
+
+.mockup-search-select {
+  min-width: 80px;
+  cursor: pointer;
+}
+
+.mockup-search-btn {
+  height: 26px;
+  padding: 0 16px;
+  background: #1e3a5f;
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  margin-left: 4px;
+}
+
+.mockup-search-btn:hover {
+  background: #2a4f7c;
+}
+
+.mockup-mapping-btn {
+  height: 26px;
+  padding: 0 14px;
+  background: #fff;
+  color: #1e3a5f;
+  border: 1px solid #1e3a5f;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  margin-left: 4px;
+}
+
+.mockup-mapping-btn:hover {
+  background: #eef2f7;
+}
+
+/* ── DNA 매핑 패널 ── */
+.dna-map-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.dna-map-panel {
+  width: 100%;
+  max-width: 820px;
+  max-height: 100%;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dna-map-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #1e3a5f;
+  color: #fff;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.dna-map-close {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.dna-map-close:hover {
+  opacity: 1;
+}
+
+.dna-map-body {
+  padding: 14px 16px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.dna-map-loading,
+.dna-map-error,
+.dna-map-empty {
+  padding: 24px;
+  text-align: center;
+  color: #666;
+  font-size: 13px;
+}
+
+.dna-map-error {
+  color: #c0392b;
+}
+
+.dna-map-meta {
+  font-size: 12px;
+  color: #3a5a82;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dna-map-openai-badge {
+  background: #10a37f;
+  color: #fff;
+  border-radius: 10px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dna-map-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.dna-map-table th {
+  background: #dce4ef;
+  color: #1e3a5f;
+  padding: 6px 8px;
+  border: 1px solid #b8c8d8;
+  text-align: left;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dna-map-table td {
+  padding: 5px 8px;
+  border: 1px solid #dde5ee;
+  vertical-align: top;
+}
+
+.dna-row--confirmed    { background: #ecfdf3; }
+.dna-row--low_confidence { background: #fffbe6; }
+.dna-row--unmatched    { background: #f6f6f6; }
+.dna-row--no_dna_schema { background: #fef2f2; }
+
+.dna-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dna-status--confirmed     { background: #12b76a; color: #fff; }
+.dna-status--low_confidence { background: #f79009; color: #fff; }
+.dna-status--unmatched     { background: #98a2b3; color: #fff; }
+.dna-status--no_dna_schema { background: #f04438; color: #fff; }
+
+.dna-score {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.dna-candidates {
+  margin-top: 3px;
+  font-size: 11px;
+  color: #888;
+}
+
+.dna-method {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: #eaeef3;
+  color: #555;
+  white-space: nowrap;
+}
+
+.dna-method--openai {
+  background: #10a37f;
+  color: #fff;
+}
+
+/* ── 탭 ── */
+.mockup-tabs {
+  display: flex;
+  gap: 0;
+  padding: 8px 18px 0;
+  background: #e8eef5;
+  border-bottom: 1px solid #b0bfcf;
+}
+
+.mockup-tab-btn {
+  padding: 6px 20px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  background: #d0daea;
+  color: #444;
+  border: 1px solid #b0bfcf;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  margin-right: 3px;
+  position: relative;
+  bottom: -1px;
+}
+
+.mockup-tab-btn.active {
+  background: #fff;
+  color: #1e3a5f;
+  border-color: #b0bfcf;
+  border-bottom: 1px solid #fff;
+  z-index: 1;
+}
+
+.mockup-tab-btn:not(.active):hover {
+  background: #bfcfdf;
+}
+
+/* ── 그리드 ── */
+.mockup-grid-wrap {
+  flex: 1;
+  overflow-x: auto;
+  padding: 0 18px;
+  background: #fff;
+  border-bottom: 1px solid #c8d4e3;
+}
+
+.mockup-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mockup-grid thead tr {
+  background: #dce4ef;
+}
+
+.mockup-grid th {
+  padding: 6px 10px;
+  border: 1px solid #b8c8d8;
+  font-weight: 600;
+  text-align: center;
+  color: #1e3a5f;
+  font-size: 11px;
+}
+
+.mockup-grid tbody tr:nth-child(even) {
+  background: #f5f8fc;
+}
+
+.mockup-grid tbody tr:hover {
+  background: #e8f0f8;
+}
+
+.mockup-grid td {
+  padding: 5px 10px;
+  border: 1px solid #dde5ee;
+}
+
+.mockup-grid td.cell-date {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: #333;
+}
+
+.mockup-grid td.cell-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+.mockup-grid td.negative {
+  color: #c0392b;
+}
+
+/* ── 합계 행 ── */
+.mockup-grid tr.total-row {
+  background: #fffde7 !important;
+}
+
+.mockup-grid tr.total-row td {
+  font-weight: 700;
+  border-top: 2px solid #b0bfcf;
+  color: #1a1a1a;
+}
+
+.mockup-grid tr.total-row td.negative {
+  color: #c0392b;
+}
+
+/* ── 하단 푸터 ── */
+.mockup-footer {
+  padding: 8px 18px;
+  background: #eef2f7;
+  border-top: 1px solid #c8d4e3;
+  font-size: 12px;
+  color: #555;
+}
+
+.mockup-footer strong {
+  color: #1e3a5f;
+  font-weight: 700;
+}
+
+/* ── 플로팅 챗봇 버튼 (FAB) ── */
+.screen-chat-fab {
+  position: absolute;
+  bottom: 28px;
+  right: 28px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: #1e3a5f;
+  color: #fff;
+  font-size: 22px;
+  border: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.18s, transform 0.15s;
+}
+
+.screen-chat-fab:hover {
+  background: #2a4f7c;
+  transform: scale(1.08);
+}
+
+/* ── 미니 챗봇 창 ── */
+.screen-chat-window {
+  position: absolute;
+  bottom: 92px;
+  right: 28px;
+  width: 360px;
+  max-height: 520px;
+  background: #fff;
+  border: 1px solid #b0bfcf;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  z-index: 999;
+  overflow: hidden;
+}
+
+.screen-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #1e3a5f;
+  color: #fff;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.screen-chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.screen-chat-clear-btn {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #fff;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.screen-chat-clear-btn:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.screen-chat-close-btn {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.screen-chat-context-badge {
+  background: #eef2f7;
+  border-bottom: 1px solid #d0daea;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: #3a5a82;
+  font-weight: 600;
+}
+
+.screen-chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.screen-chat-empty {
+  text-align: center;
+  color: #999;
+  font-size: 12px;
+  margin: auto;
+  line-height: 1.8;
+}
+
+.screen-chat-empty small {
+  color: #aaa;
+}
+
+.screen-chat-msg {
+  display: flex;
+}
+
+.screen-chat-msg--user {
+  justify-content: flex-end;
+}
+
+.screen-chat-msg--assistant {
+  justify-content: flex-start;
+}
+
+.screen-chat-bubble {
+  max-width: 84%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.screen-chat-msg--user .screen-chat-bubble {
+  background: #1e3a5f;
+  color: #fff;
+  border-bottom-right-radius: 3px;
+}
+
+.screen-chat-msg--assistant .screen-chat-bubble {
+  background: #f0f4fa;
+  color: #222;
+  border-bottom-left-radius: 3px;
+  border: 1px solid #d8e4f0;
+}
+
+/* 타이핑 애니메이션 */
+.screen-chat-typing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 14px;
+}
+
+.screen-chat-typing span {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #7a9cbf;
+  animation: screen-bounce 1.2s infinite ease-in-out;
+}
+
+.screen-chat-typing span:nth-child(2) { animation-delay: 0.2s; }
+.screen-chat-typing span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes screen-bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
+  40%            { transform: scale(1);   opacity: 1;   }
+}
+
+/* 입력 영역 */
+.screen-chat-input-row {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid #d0daea;
+  background: #f7f9fc;
+}
+
+.screen-chat-input {
+  flex: 1;
+  resize: none;
+  border: 1px solid #aab8c8;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  color: #222;
+  background: #fff;
+  line-height: 1.5;
+}
+
+.screen-chat-input:focus {
+  outline: none;
+  border-color: #1e3a5f;
+}
+
+.screen-chat-send-btn {
+  align-self: flex-end;
+  padding: 6px 14px;
+  background: #1e3a5f;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.screen-chat-send-btn:hover:not(:disabled) {
+  background: #2a4f7c;
+}
+
+.screen-chat-send-btn:disabled {
+  background: #9ab0c8;
+  cursor: not-allowed;
+}
+

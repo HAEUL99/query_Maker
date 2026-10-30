@@ -1,0 +1,10 @@
+/*
+ * Screen  : SFNRCV767 수납 마감자료 조회
+ * Service : SFNRCV767SV
+ */
+void SFNRCV767SV_select(APP_CONTEXT *ctx) {
+    dbio_exec(ctx, "DEFN_SFNRCV767VW_001_SP",
+              ctx->p_stdd_ym,
+              ctx->p_supt_objt_dusn,
+              ctx->p_loan_subj_dvsn);
+}

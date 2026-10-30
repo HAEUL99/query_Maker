@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     TABLE_NAME_REGEX_CUSTOMER: str = r"^TBL_[A-Z0-9]+$"
     """관리자 풀: TB_ 뒤는 밑줄 없이 한 덩어리(예: TB_FNMGT014, TB_BUDGETFACT)."""
     TABLE_NAME_REGEX_ADMIN: str = r"^TB_[A-Z0-9]+$"
+    """OpenAI API 키 (HFSR→DNA 컬럼 매핑 전용). 비어 있으면 편집거리 매핑만 사용."""
+    OPENAI_API_KEY: str = ""
+    """HFSR→DNA 매핑에 사용할 OpenAI 모델."""
+    OPENAI_MAPPING_MODEL: str = "gpt-4o"
 
     def customer_collection_name(self) -> str:
         """고객용 스키마가 저장되는 Chroma 컬렉션 이름입니다."""
